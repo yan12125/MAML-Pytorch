@@ -1,4 +1,5 @@
 import  torch, os
+import  torch.onnx
 import  numpy as np
 from    omniglotNShot import OmniglotNShot
 import  argparse
@@ -14,31 +15,50 @@ def main(args):
     print(args)
 
     config = [
-        ('conv2d', [64, 1, 3, 3, 2, 0]),
-        ('relu', [True]),
+        ('conv2d', [64, 1, 3, 3, 2, 1]),
         ('bn', [64]),
-        ('conv2d', [64, 64, 3, 3, 2, 0]),
         ('relu', [True]),
+        ('conv2d', [64, 64, 3, 3, 2, 1]),
         ('bn', [64]),
-        ('conv2d', [64, 64, 3, 3, 2, 0]),
         ('relu', [True]),
+        ('conv2d', [64, 64, 3, 3, 2, 1]),
         ('bn', [64]),
-        ('conv2d', [64, 64, 2, 2, 1, 0]),
         ('relu', [True]),
+        ('conv2d', [64, 64, 3, 3, 2, 1]),
         ('bn', [64]),
+        ('relu', [True]),
+        ('avg_pool2d', [2, 1, 0]),
         ('flatten', []),
         ('linear', [args.n_way, 64])
     ]
 
-    device = torch.device('cuda')
+    if torch.cuda.is_available():
+        device = torch.device('cuda')
+    else:
+        device = torch.device('cpu')
     maml = Meta(args, config).to(device)
+
+    if args.export:
+        state_dict = torch.load('maml.pth', map_location=torch.device('cpu'))
+        # replace key names for use in the inner net
+        rewritten_state_dict = dict([
+            (key.replace('net.', ''), value)
+            for key, value in state_dict.items()
+        ])
+        maml.net.load_state_dict(rewritten_state_dict)
+
+        x = torch.randn(args.task_num, 1, args.imgsz, args.imgsz, requires_grad=True)
+        torch.onnx.export(model=maml.net, args=(x,), f="maml.onnx", opset_version=13,
+                          training=torch.onnx.TrainingMode.TRAINING, do_constant_folding=False)
+
+        return
 
     tmp = filter(lambda x: x.requires_grad, maml.parameters())
     num = sum(map(lambda x: np.prod(x.shape), tmp))
     print(maml)
     print('Total trainable tensors:', num)
 
-    db_train = OmniglotNShot('omniglot',
+    db_train = OmniglotNShot(os.path.expanduser('~/.cache/omniglot'),
                        batchsz=args.task_num,
                        n_way=args.n_way,
                        k_shot=args.k_spt,
@@ -74,6 +94,7 @@ def main(args):
             accs = np.array(accs).mean(axis=0).astype(np.float16)
             print('Test acc:', accs)
 
+    torch.save(maml.state_dict(), 'maml.pth')
 
 if __name__ == '__main__':
 
@@ -89,6 +110,7 @@ if __name__ == '__main__':
     argparser.add_argument('--update_lr', type=float, help='task-level inner update learning rate', default=0.4)
     argparser.add_argument('--update_step', type=int, help='task-level inner update steps', default=5)
     argparser.add_argument('--update_step_test', type=int, help='update steps for finetunning', default=10)
+    argparser.add_argument('--export', action='store_true', help='Export model', default=False)
 
     args = argparser.parse_args()
 

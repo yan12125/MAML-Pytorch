@@ -90,7 +90,15 @@ class Omniglot(data.Dataset):
 
 def find_classes(root_dir):
     retour = []
-    for (root, dirs, files) in os.walk(root_dir):
+    all_files = {}
+    # On some filesystems (ex: ext4), the order of root dirs, and the order of
+    # files in each root dir, can be randomized. Sorting them to make sure
+    # the dataset are loaded deterministically.
+    for (root, _, files) in os.walk(root_dir):
+        all_files[root] = sorted(files)
+
+    for root in sorted(all_files.keys()):
+        files = all_files[root]
         for f in files:
             if (f.endswith("png")):
                 r = root.split('/')
